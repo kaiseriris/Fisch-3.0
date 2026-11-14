@@ -1,0 +1,64 @@
+name: Build Fisch Macro APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find the project (unzip FischMacro.zip if that is what was uploaded)
+        run: |
+          if [ -f FischMacro.zip ]; then
+            rm -rf proj && mkdir proj && unzip -q FischMacro.zip -d proj
+            # if the zip contains a single top folder, step into it
+            if [ ! -f proj/settings.gradle ] && [ "$(ls -1 proj | wc -l)" = "1" ]; then
+              mv proj/*/* proj/ 2>/dev/null || true
+              mv proj/*/.[!.]* proj/ 2>/dev/null || true
+            fi
+            echo "PROJ=proj" >> $GITHUB_ENV
+          else
+            echo "PROJ=." >> $GITHUB_ENV
+          fi
+          ls -la "$PROJ" || true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build debug APK
+        working-directory: ${{ env.PROJ }}
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FischMacro-debug-apk
+          path: ${{ env.PROJ }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Publish APK as a release (easy download on phone)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Fisch Macro build ${{ github.run_number }}
+          files: ${{ env.PROJ }}/app/build/outputs/apk/debug/*.apk
