@@ -13,18 +13,49 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Find the project
+      - name: Locate the Android project
+        shell: bash
         run: |
-          if [ -f FischMacro.zip ]; then
-            rm -rf proj && mkdir proj && unzip -q FischMacro.zip -d proj
-            if [ ! -f proj/settings.gradle ] && [ "$(ls -1 proj | wc -l)" = "1" ]; then
-              mv proj/*/* proj/ 2>/dev/null || true
-              mv proj/*/.[!.]* proj/ 2>/dev/null || true
+          set -euo pipefail
+
+          PROJECT_DIR="."
+
+          ZIP_CANDIDATES=(
+            "FischMacro.zip"
+            "FischMacro(2)-full-loop-tuning.zip"
+            "FischMacro*.zip"
+          )
+
+          for zip_name in "${ZIP_CANDIDATES[@]}"; do
+            if compgen -G "$zip_name" > /dev/null; then
+              rm -rf build-root
+              mkdir -p build-root
+              unzip -q "$zip_name" -d build-root
+
+              if [ ! -f build-root/settings.gradle ] && [ ! -f build-root/settings.gradle.kts ] && [ ! -f build-root/build.gradle ] && [ ! -f build-root/build.gradle.kts ]; then
+                shopt -s dotglob nullglob
+                matches=(build-root/*)
+                if [ "${#matches[@]}" -eq 1 ] && [ -d "${matches[0]}" ]; then
+                  mv "${matches[0]}"/* build-root/ 2>/dev/null || true
+                  mv "${matches[0]}"/.* build-root/ 2>/dev/null || true
+                  rmdir "${matches[0]}" 2>/dev/null || true
+                fi
+              fi
+
+              if [ -f build-root/settings.gradle ] || [ -f build-root/settings.gradle.kts ] || [ -f build-root/build.gradle ] || [ -f build-root/build.gradle.kts ]; then
+                PROJECT_DIR="build-root"
+                break
+              fi
             fi
-            echo "PROJ=proj" >> $GITHUB_ENV
-          else
-            echo "PROJ=." >> $GITHUB_ENV
+          done
+
+          if [ "$PROJECT_DIR" = "." ] && [ ! -f settings.gradle ] && [ ! -f settings.gradle.kts ] && [ ! -f build.gradle ] && [ ! -f build.gradle.kts ]; then
+            echo "No Gradle project found in repo root or zip archive."
+            find . -maxdepth 3 \( -name settings.gradle -o -name settings.gradle.kts -o -name build.gradle -o -name build.gradle.kts \) | head
+            exit 1
           fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@v4
         with:
@@ -46,14 +77,14 @@ jobs:
           gradle-version: '8.9'
 
       - name: Build debug APK
-        working-directory: ${{ env.PROJ }}
+        working-directory: ${{ env.PROJECT_DIR }}
         run: gradle --no-daemon --stacktrace :app:assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: FischMacro-debug-apk
-          path: ${{ env.PROJ }}/app/build/outputs/apk/debug/*.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
       - name: Publish APK as a release
@@ -61,4 +92,4 @@ jobs:
         with:
           tag_name: build-${{ github.run_number }}
           name: Fisch Macro build ${{ github.run_number }}
-          files: ${{ env.PROJ }}/app/build/outputs/apk/debug/*.apk
+          files: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
